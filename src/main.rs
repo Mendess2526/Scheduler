@@ -2,7 +2,7 @@ use chrono::{NaiveTime, Timelike};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    convert::{TryFrom, TryInto},
+    convert::TryFrom,
     env::args,
     fmt::{self, Display},
     fs::File,
@@ -207,19 +207,15 @@ impl Schedule {
             course: &str,
             other_courses: &[&str],
         ) -> Vec<TimeTable> {
-            println!("course: {}\n{}", course, timetable);
             lab_classes[course]
                 .iter()
-                .map(|class| timetable.clone().add(class))
+                .map(|class| {
+                    timetable.clone().add(class)
+                })
                 .filter_map(Result::ok)
-                .filter_map(|timetable| match other_courses.get(0) {
-                    Some(next) => Some(gather(
-                        lab_classes,
-                        timetable.clone(),
-                        next,
-                        &other_courses[1..],
-                    )),
-                    None => None,
+                .map(|timetable| match other_courses.get(0) {
+                    Some(next) => gather(lab_classes, timetable.clone(), next, &other_courses[1..]),
+                    None => vec![timetable],
                 })
                 .flatten()
                 .collect()
@@ -228,17 +224,6 @@ impl Schedule {
             .get(0)
             .map(|first| gather(&lab_classes, timetable, first, &courses[1..]))
             .unwrap_or_else(Vec::new))
-    }
-}
-
-#[derive(Clone)]
-struct TimeTable([[TimeBlock; 24 * 2]; WEEKDAYS]);
-
-impl Default for TimeTable {
-    fn default() -> Self {
-        Self(array_init::array_init(|_| {
-            array_init::array_init(|_| TimeBlock::default())
-        }))
     }
 }
 
@@ -262,8 +247,11 @@ impl TimeBlock {
 
     fn display(&self, width: usize, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Empty => (0..6).try_for_each(|_| write!(f, " ")),
-            Self::Filled(t, s) => write!(f, "{} {:<3} ", t, s),
+            Self::Empty => (0..(width + 2)).try_for_each(|_| write!(f, " ")),
+            Self::Filled(t, s) => {
+                write!(f, "{} {}", t, s)?;
+                (0..(width - s.width())).try_for_each(|_| write!(f, " "))
+            }
         }
     }
 }
@@ -274,21 +262,28 @@ impl Default for TimeBlock {
     }
 }
 
+#[derive(Clone)]
+struct TimeTable([[TimeBlock; 24 * 2]; WEEKDAYS]);
+
+impl Default for TimeTable {
+    fn default() -> Self {
+        Self(array_init::array_init(|_| {
+            array_init::array_init(|_| TimeBlock::default())
+        }))
+    }
+}
+
 impl TimeTable {
     fn add(mut self, class: &Class) -> Result<TimeTable, [(WeekDay, [NaiveTime; 2], String); 2]> {
         assert!(class.start.minute() == 0 || class.start.minute() == 30);
         assert!(class.end.minute() == 0 || class.end.minute() == 30);
-        let start: usize = (class.start.hour() * 2 + class.start.minute() / 30)
-            .try_into()
-            .unwrap();
-        let end = (class.end.hour() * 2 + class.end.minute() / 30)
-            .try_into()
-            .unwrap();
+        let start = (class.start.hour() * 2 + class.start.minute() / 30) as usize;
+        let end = (class.end.hour() * 2 + class.end.minute() / 30) as usize;
         if let Some(TimeBlock::Filled(_, s)) = self.0[class.weekday as usize][start..end]
             .iter()
             .find(|b| **b != TimeBlock::Empty)
         {
-            return Err([
+            let e = [
                 (
                     class.weekday,
                     [TimeBlock::to_time(start), TimeBlock::to_time(end)],
@@ -299,8 +294,10 @@ impl TimeTable {
                     [TimeBlock::to_time(start), TimeBlock::to_time(end)],
                     class.name.to_string(),
                 ),
-            ]);
+            ];
+            Err(e)
         } else {
+            // dbg!([start, end], class);
             self.0[class.weekday as usize][start..end]
                 .iter_mut()
                 .for_each(|b| *b = TimeBlock::Filled(class.kind, class.name.to_string()));
