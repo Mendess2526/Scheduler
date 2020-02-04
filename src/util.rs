@@ -7,7 +7,7 @@ use std::{
 
 pub const WEEKDAYS: usize = 7;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeekDay {
     Mon = 0,
     Tue = 1,
@@ -53,8 +53,28 @@ impl FromStr for WeekDay {
             _ if "Wed".eq_ignore_ascii_case(s) => Ok(Self::Wed),
             _ if "Thu".eq_ignore_ascii_case(s) => Ok(Self::Thu),
             _ if "Fri".eq_ignore_ascii_case(s) => Ok(Self::Fri),
+            _ if "Sat".eq_ignore_ascii_case(s) => Ok(Self::Sat),
+            _ if "Sun".eq_ignore_ascii_case(s) => Ok(Self::Sun),
             _ => Err("Invalid week day"),
         }
+    }
+}
+
+impl Display for WeekDay {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Mon => "Mon",
+                Self::Tue => "Tue",
+                Self::Wed => "Wed",
+                Self::Thu => "Thu",
+                Self::Fri => "Fri",
+                Self::Sat => "Sat",
+                Self::Sun => "Sun",
+            }
+        )
     }
 }
 

@@ -90,6 +90,7 @@ impl TimeTable {
 
     pub fn starts_after(&self, time: NaiveTime) -> bool {
         let idx = time_to_index(time);
+        dbg!(idx, time);
         self.0
             .iter()
             .all(|day| day[..idx].iter().all(|b| *b == TimeBlock::Empty))
@@ -99,7 +100,7 @@ impl TimeTable {
         let idx = time_to_index(time);
         self.0
             .iter()
-            .all(|day| day[idx..].iter().all(|b| *b == TimeBlock::Empty))
+            .all(|day| day[(idx + 1)..].iter().all(|b| *b == TimeBlock::Empty))
     }
 
     pub fn free_day(&self, d: WeekDay) -> bool {
@@ -111,6 +112,34 @@ impl TimeTable {
             .iter()
             .flat_map(|x| x.iter())
             .any(|x| *x == (kind, name))
+    }
+
+    pub fn hasnt_the_shift(&self, kind: ClassType, name: &str) -> bool {
+        !self.has_the_shift(kind, name)
+    }
+
+    pub fn sum_work_hours(&self) -> isize {
+        self.0
+            .iter()
+            .map(|day| {
+                let first = day
+                    .iter()
+                    .enumerate()
+                    .find(|(_, b)| **b != TimeBlock::Empty)
+                    .map(|(i, _)| i);
+                let last = day
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, b)| **b != TimeBlock::Empty)
+                    .map(|(i, _)| i);
+                if let (Some(f), Some(l)) = (first, last) {
+                    l - f
+                } else {
+                    0
+                }
+            })
+            .sum::<usize>() as isize
     }
 }
 
@@ -128,14 +157,26 @@ impl Display for TimeTable {
             .flat_map(|x| x.iter().map(|s| s.width()))
             .max()
             .ok_or(fmt::Error)?;
+        let mut first = 48;
+        let mut last = 48;
         for i in 0..(24 * 2) {
             if self.0.iter().any(|x| x[i] != TimeBlock::Empty) {
-                write!(f, "{} ", TimeBlock::to_time(i).format("%H:%M"))?;
-                for day in &ALL_DAYS {
-                    self.0[*day as usize][i].display(&self.1, max_width, f)?
-                }
-                writeln!(f)?;
+                first = i;
+                break;
             }
+        }
+        for i in (0..(24 * 2)).rev() {
+            if self.0.iter().any(|x| x[i] != TimeBlock::Empty) {
+                last = i + 1;
+                break;
+            }
+        }
+        for i in first..last {
+            write!(f, "{} ", TimeBlock::to_time(i).format("%H:%M"))?;
+            for day in &ALL_DAYS {
+                self.0[*day as usize][i].display(&self.1, max_width, f)?
+            }
+            writeln!(f)?;
         }
         Ok(())
     }
