@@ -8,7 +8,11 @@ edition = "2018"
 
 [dependencies]
 ansi_term = "0.x"
-chrono = "*"
+chrono = { version = "0.4", features = ["serde"] }
 array-init = "*"
 unicode-width = "*"
 dialoguer = "*"
+serde = { version = "1.x", features = ["derive"] }
+serde_json = "*"
+enum-iterator = "0.5"
+itertools = "0.8.x"

@@ -1,4 +1,6 @@
 use chrono::NaiveTime;
+use enum_iterator::IntoEnumIterator;
+use serde::{Deserialize, Serialize};
 use std::{
     convert::TryFrom,
     fmt::{self, Display},
@@ -7,7 +9,7 @@ use std::{
 
 pub const WEEKDAYS: usize = 7;
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoEnumIterator)]
 pub enum WeekDay {
     Mon = 0,
     Tue = 1,
@@ -78,7 +80,7 @@ impl Display for WeekDay {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ClassType {
     T(u32),
     L(u32),

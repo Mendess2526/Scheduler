@@ -5,12 +5,18 @@ mod util;
 
 use chrono::{format::ParseResult, NaiveTime};
 use dialoguer::{Checkboxes, Input};
+use enum_iterator::IntoEnumIterator;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use serde_json::{from_reader, to_writer};
 use shifts::Shifts;
 use std::{
     collections::HashSet,
     env::args,
+    error::Error,
+    fmt::{self, Display},
     fs::File,
-    io::{self, stdin, BufRead, BufReader},
+    io::{self, BufRead, BufReader},
 };
 use timetable::TimeTable;
 use util::{ClassType, WeekDay, ALL_DAYS};
@@ -33,6 +39,7 @@ fn main() -> io::Result<()> {
     let mut tts: Vec<TimeTable> = (&schedule).into();
     tts.sort_by_cached_key(|t| -t.sum_work_hours());
     let mut filters = TimetableFilters::default();
+    let mut feedback = String::new();
     loop {
         let mut amount = 0;
         for (i, t) in tts.iter().filter(|t| filters.filter(t)).enumerate() {
@@ -40,11 +47,47 @@ fn main() -> io::Result<()> {
             amount = i + 1;
         }
         println!("Number of possible timetables: {}", amount);
-        filters.prompt();
+        if !feedback.is_empty() {
+            println!("{}", feedback);
+        }
+        if let Some(f) = filters.prompt(&mut feedback) {
+            filters = f;
+        } else {
+            break Ok(())
+        }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, IntoEnumIterator)]
+pub enum SubMenus {
+    StartsAfter,
+    EndsBefore,
+    HasFreeDay,
+    HasAShift,
+    HasntAShift,
+    SaveFilters,
+    LoadFilters,
+    Close,
+}
+
+impl Display for SubMenus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use SubMenus::*;
+        let s = match self {
+            StartsAfter => "Starts after",
+            EndsBefore => "Ends before",
+            HasFreeDay => "Has free day",
+            HasAShift => "Has a shift",
+            HasntAShift => "Hasn't a shift",
+            SaveFilters => "Save filters",
+            LoadFilters => "Load filters",
+            Close => "Close",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TimetableFilters {
     starts_after: Option<NaiveTime>,
     ends_before: Option<NaiveTime>,
@@ -69,21 +112,20 @@ impl TimetableFilters {
                 .all(|(s, t)| timetable.hasnt_the_shift(*s, &t))
     }
 
-    pub fn prompt(&mut self) -> &mut Self {
+    pub fn prompt(mut self, feedback: &mut String) -> Option<Self> {
+        feedback.clear();
+        let submenus = SubMenus::into_enum_iter().collect::<Vec<_>>();
         let pick = Input::new()
-            .with_prompt(
-                "Filters:
-1) Starts after
-2) Ends before
-3) Has free day
-4) Has a shift
-5) Hasn't a shift
-0) Cancel
-Pick one",
-            )
+            .with_prompt(&format!(
+                "Filters:\n{}\nPick one",
+                submenus
+                    .iter()
+                    .enumerate()
+                    .format_with("\n", |(i, p), f| f(&format_args!("{}) {}", i, p)))
+            ))
             .interact();
-        match pick {
-            Ok(1) => {
+        match pick.map(|i: usize| submenus[i]) {
+            Ok(SubMenus::StartsAfter) => {
                 let input = Input::<String>::new()
                     .with_prompt("Time")
                     .allow_empty(true)
@@ -93,10 +135,10 @@ Pick one",
                     self.starts_after = Some(t)
                 } else {
                     self.starts_after = None;
-                    println!("Cleared")
+                    feedback.push_str("Cleared")
                 }
             }
-            Ok(2) => {
+            Ok(SubMenus::EndsBefore) => {
                 let input = Input::<String>::new()
                     .with_prompt("Time")
                     .allow_empty(true)
@@ -106,10 +148,10 @@ Pick one",
                     self.ends_before = Some(t)
                 } else {
                     self.ends_before = None;
-                    println!("Cleared")
+                    feedback.push_str("Cleared")
                 }
             }
-            Ok(3) => {
+            Ok(SubMenus::HasFreeDay) => {
                 let checked = ALL_DAYS
                     .iter()
                     .map(|d| (d, self.free_days.contains(d)))
@@ -123,7 +165,7 @@ Pick one",
                     self.free_days.insert(*checked[d].0);
                 }
             }
-            Ok(4) => {
+            Ok(SubMenus::HasAShift) => {
                 let k = Input::new()
                     .with_prompt("Shift [T{{number}}/L{{number}}]")
                     .interact();
@@ -132,11 +174,10 @@ Pick one",
                     self.has_the_shift.push((k, name));
                 } else {
                     self.has_the_shift.clear();
-                    println!("Cleared, press enter");
-                    read_line(&mut String::new());
+                    feedback.push_str("Cleared, press enter");
                 }
             }
-            Ok(5) => {
+            Ok(SubMenus::HasntAShift) => {
                 let k = Input::new()
                     .with_prompt("Shift [T{{number}}/L{{number}}]")
                     .interact();
@@ -145,20 +186,41 @@ Pick one",
                     self.hasnt_the_shift.push((k, name));
                 } else {
                     self.hasnt_the_shift.clear();
-                    println!("Cleared, press enter");
-                    read_line(&mut String::new());
+                    feedback.push_str("Cleared, press enter");
                 }
             }
-            Ok(0) => (),
-            _ => println!("Invalid choice"),
+            Ok(SubMenus::SaveFilters) => {
+                let k = Input::<String>::new()
+                    .with_prompt("Filename")
+                    .interact()
+                    .map_err(|e| Box::new(e) as Box<dyn Error>)
+                    .and_then(|f| File::create(f).map_err(|e| Box::new(e) as Box<dyn Error>))
+                    .and_then(|f| to_writer(f, &self).map_err(|e| Box::new(e) as Box<dyn Error>));
+                match k {
+                    Ok(_) => feedback.push_str("Saved!"),
+                    Err(e) => feedback.push_str(&format!("Error saving filters: {}", e)),
+                }
+            }
+            Ok(SubMenus::LoadFilters) => {
+                let k = Input::<String>::new()
+                    .with_prompt("Filename")
+                    .interact()
+                    .map_err(|e| Box::new(e) as Box<dyn Error>)
+                    .and_then(|f| File::open(f).map_err(|e| Box::new(e) as Box<dyn Error>))
+                    .and_then(|f| from_reader(f).map_err(|e| Box::new(e) as Box<dyn Error>));
+                match k {
+                    Ok(f) => {
+                        feedback.push_str("Loaded!");
+                        self = f
+                    }
+                    Err(e) => feedback.push_str(&format!("Error saving filters: {}", e)),
+                }
+            }
+            Ok(SubMenus::Close) => return None,
+            Err(_) => feedback.push_str("Invalid choice"),
         }
-        self
+        Some(self)
     }
-}
-
-fn read_line(i: &mut String) -> usize {
-    i.clear();
-    stdin().read_line(i).unwrap()
 }
 
 fn parse_time(s: &str) -> ParseResult<NaiveTime> {
