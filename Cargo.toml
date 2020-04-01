@@ -16,3 +16,9 @@ serde = { version = "1.x", features = ["derive"] }
 serde_json = "*"
 enum-iterator = "0.5"
 itertools = "0.8.x"
+icalendar = { version = "0.9", optional = true }
+
+[features]
+default = ["ical"]
+ical = ["icalendar"]
+

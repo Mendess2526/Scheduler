@@ -1,9 +1,10 @@
 mod error;
+mod ical;
 mod shifts;
 mod timetable;
 mod util;
 
-use chrono::{format::ParseResult, NaiveTime};
+use chrono::{format::ParseResult, NaiveDate, NaiveTime};
 use dialoguer::{Checkboxes, Input};
 use enum_iterator::IntoEnumIterator;
 use itertools::Itertools;
@@ -41,19 +42,19 @@ fn main() -> io::Result<()> {
     let mut filters = TimetableFilters::default();
     let mut feedback = String::new();
     loop {
-        let mut amount = 0;
-        for (i, t) in tts.iter().filter(|t| filters.filter(t)).enumerate() {
+        tts.retain(|t| filters.filter(t));
+        let amount = tts.len();
+        for t in &tts {
             println!("{}", t);
-            amount = i + 1;
         }
         println!("Number of possible timetables: {}", amount);
         if !feedback.is_empty() {
             println!("{}", feedback);
         }
-        if let Some(f) = filters.prompt(&mut feedback) {
+        if let Some(f) = filters.prompt(&mut feedback, tts.iter()) {
             filters = f;
         } else {
-            break Ok(())
+            break Ok(());
         }
     }
 }
@@ -67,6 +68,7 @@ pub enum SubMenus {
     HasntAShift,
     SaveFilters,
     LoadFilters,
+    ExportToIcal,
     Close,
 }
 
@@ -81,6 +83,7 @@ impl Display for SubMenus {
             HasntAShift => "Hasn't a shift",
             SaveFilters => "Save filters",
             LoadFilters => "Load filters",
+            ExportToIcal => "Export as iCal",
             Close => "Close",
         };
         write!(f, "{}", s)
@@ -112,7 +115,11 @@ impl TimetableFilters {
                 .all(|(s, t)| timetable.hasnt_the_shift(*s, &t))
     }
 
-    pub fn prompt(mut self, feedback: &mut String) -> Option<Self> {
+    pub fn prompt<'a>(
+        mut self,
+        feedback: &mut String,
+        timetables: impl Iterator<Item = &'a TimeTable>,
+    ) -> Option<Self> {
         feedback.clear();
         let submenus = SubMenus::into_enum_iter().collect::<Vec<_>>();
         let pick = Input::new()
@@ -217,6 +224,33 @@ impl TimetableFilters {
                 }
             }
             Ok(SubMenus::Close) => return None,
+            Ok(SubMenus::ExportToIcal) => {
+                let k = || -> Result<(), Box<dyn Error>> {
+                    let mut file = Input::<String>::new()
+                        .with_prompt("Filename")
+                        .interact()
+                        .map_err(|e| Box::new(e) as Box<dyn Error>)
+                        .and_then(|f| File::create(f).map_err(|e| Box::new(e) as Box<dyn Error>))?;
+                    let time_table = match timetables.exactly_one() {
+                        Ok(t) => t,
+                        Err(_) => return Err("Either too many timetables or too few".into()),
+                    };
+                    let start_date = Input::<NaiveDate>::new()
+                        .with_prompt("Start date: YY-MM-DD")
+                        .interact()
+                        .map_err(|e| Box::new(e) as Box<dyn Error>)?;
+                    let end_date = Input::<NaiveDate>::new()
+                        .with_prompt("End date: YY-MM-DD")
+                        .interact()
+                        .map_err(|e| Box::new(e) as Box<dyn Error>)?;
+                    ical::write_cal(&mut file, time_table, start_date, end_date)
+                        .map_err(|e| Box::new(e) as Box<dyn Error>)
+                }();
+                match k {
+                    Ok(_) => feedback.push_str("Saved!"),
+                    Err(e) => feedback.push_str(&format!("Error exporting to iCal: {}", e)),
+                }
+            }
             Err(_) => feedback.push_str("Invalid choice"),
         }
         Some(self)

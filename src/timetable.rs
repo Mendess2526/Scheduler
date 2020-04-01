@@ -10,6 +10,7 @@ use chrono::{NaiveTime, Timelike};
 use std::{
     collections::HashMap,
     fmt::{self, Display},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -32,11 +33,12 @@ impl TimeTable {
         mut self,
         class: &Class,
     ) -> Result<TimeTable, (WeekDay, [NaiveTime; 2], (String, String))> {
+        static ID: AtomicU64 = AtomicU64::new(0);
         assert!(class.start.minute() == 0 || class.start.minute() == 30);
         assert!(class.end.minute() == 0 || class.end.minute() == 30);
         let start = time_to_index(class.start);
         let end = time_to_index(class.end);
-        if let Some(TimeBlock::Filled(_, s)) = self.0[class.weekday as usize][start..end]
+        if let Some(TimeBlock::Filled(_, s, _)) = self.0[class.weekday as usize][start..end]
             .iter()
             .find(|b| **b != TimeBlock::Empty)
         {
@@ -47,9 +49,10 @@ impl TimeTable {
             );
             Err(e)
         } else {
+            let id = ID.fetch_add(1, Ordering::Relaxed);
             self.0[class.weekday as usize][start..end]
                 .iter_mut()
-                .for_each(|b| *b = TimeBlock::Filled(class.kind, class.name.to_string()));
+                .for_each(|b| *b = TimeBlock::Filled(class.kind, class.name.to_string(), id));
             if !self.1.contains_key(&class.name) {
                 let n = self.1.len();
                 self.1.insert(class.name.to_string(), COLORS[n]);
@@ -62,12 +65,12 @@ impl TimeTable {
         let classes = schedule.class_set();
         let courses = classes.keys().map(|x| *x).collect::<Vec<(&str, bool)>>();
         fn gather<'a>(
-            lab_classes: &HashMap<(&'a str, bool), HashMap<i64, ClassGroup>>,
+            classes: &HashMap<(&'a str, bool), HashMap<i64, ClassGroup>>,
             timetable: TimeTable,
             course: &(&'a str, bool),
             other_courses: &[(&str, bool)],
         ) -> Vec<TimeTable> {
-            lab_classes[course]
+            classes[course]
                 .values()
                 .map(|class_block| {
                     class_block
@@ -76,7 +79,7 @@ impl TimeTable {
                 })
                 .filter_map(Result::ok)
                 .map(|timetable| match other_courses.get(0) {
-                    Some(next) => gather(lab_classes, timetable.clone(), next, &other_courses[1..]),
+                    Some(next) => gather(classes, timetable.clone(), next, &other_courses[1..]),
                     None => vec![timetable],
                 })
                 .flatten()
@@ -141,6 +144,18 @@ impl TimeTable {
             })
             .sum::<usize>() as isize
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = impl Iterator<Item = (usize, ClassType, &str)>> {
+        self.0.iter().map(|day| {
+            day.iter().enumerate().filter_map(|(i, x)| {
+                if let TimeBlock::Filled(t, c, ..) = x {
+                    Some((i, *t, c.as_str()))
+                } else {
+                    None
+                }
+            })
+        })
+    }
 }
 
 impl From<&Shifts> for Vec<TimeTable> {
@@ -185,18 +200,18 @@ impl Display for TimeTable {
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum TimeBlock {
     Empty,
-    Filled(ClassType, String),
+    Filled(ClassType, String, u64),
 }
 
 impl TimeBlock {
     fn to_time(u: usize) -> NaiveTime {
-        NaiveTime::from_hms((u / 2) as u32, (u % 2) as u32 * 30, 0)
+        index_to_time(u)
     }
 
     fn width(&self) -> usize {
         match self {
             Self::Empty => 0,
-            Self::Filled(_, s) => 2 + s.as_str().width(),
+            Self::Filled(_, s, _) => 2 + s.as_str().width(),
         }
     }
 
@@ -208,7 +223,7 @@ impl TimeBlock {
     ) -> fmt::Result {
         match self {
             Self::Empty => (0..(width + 3)).try_for_each(|_| write!(f, " ")),
-            Self::Filled(t, s) => {
+            Self::Filled(t, s, _) => {
                 let style = match t {
                     ClassType::T(_) => Style::new().on(color_map[s]),
                     ClassType::L(_) => Style::new().fg(color_map[s]),
@@ -228,7 +243,7 @@ impl Default for TimeBlock {
 
 impl PartialEq<(ClassType, &'_ str)> for TimeBlock {
     fn eq(&self, other: &(ClassType, &'_ str)) -> bool {
-        if let TimeBlock::Filled(t, n) = self {
+        if let TimeBlock::Filled(t, n, _) = self {
             *t == other.0 && n == other.1
         } else {
             false
@@ -236,6 +251,10 @@ impl PartialEq<(ClassType, &'_ str)> for TimeBlock {
     }
 }
 
-fn time_to_index(t: NaiveTime) -> usize {
+pub fn time_to_index(t: NaiveTime) -> usize {
     (t.hour() * 2 + t.minute() / 30) as usize
+}
+
+pub fn index_to_time(u: usize) -> NaiveTime {
+    NaiveTime::from_hms((u / 2) as u32, (u % 2) as u32 * 30, 0)
 }
